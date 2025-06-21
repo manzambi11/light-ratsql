@@ -16,8 +16,10 @@ This code was developed as part of my PhD research in NLP and semantic parsing (
 ## 📖 Paper 
 
 📝 [Light RAT-SQL: A RAT-SQL with More Abstraction and Less Embedding of Pre-existing Relations](https://www.texilajournal.com/adminlogin/download.php?category=article&file=Academic_Research_Vol10_Issue2_Article_1.pdf)  
+
 📚 Citation (APA or BibTeX)
-NM Ndongala - Texila Int. J. Acad. Res, 2023
+
+- NM Ndongala. (2023) Light RAT-SQL: A RAT-SQL with More Abstraction and Less Embedding of Pre-existing Relations. Texila International Journal of Academic Research, 10, 1–11. https://doi.org/10.21522/tijar.2014.10.02.art001
 
 ## 🚀 Quick Start
 1. Follow steps from [RAT-SQL](https://github.com/microsoft/rat-sql)
@@ -35,6 +37,10 @@ Compute_syntax_dependancy (forward and backward relation) using spacy
 
 Spreading relation through heads before Transformer Computation 
 - \light_ratsql\models\transformer.py
+
+## Author
+
+- [Nathan MANZAMBI NDONGALA, Ph.D in CS](https://www.linkedin.com/in/nathan-manzambi-59a2285b/)
 
 ## Acknowledgment
 This project builds upon RAT-SQL by Microsoft Research, licensed under the MIT License.
