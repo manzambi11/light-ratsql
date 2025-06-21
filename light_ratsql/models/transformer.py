@@ -128,34 +128,6 @@ def sparse_attention(query, key, value, alpha, mask=None, dropout=None):
     # return torch.matmul(p_attn, value), scores.squeeze(1).squeeze(1)
     return torch.matmul(p_attn, value), p_attn
 
-def relative_attention_values_with_positions(weight, value, relation, position):
-    # In this version, relation vectors are shared across heads.
-    # weight: [batch, heads, num queries, num kvs].
-    # value: [batch, heads, num kvs, depth].
-    # relation: [batch, num queries, num kvs, depth].
-
-    # wv_matmul is [batch, heads, num queries, depth]
-    wv_matmul = torch.matmul(weight, value)
-    #lv =torch.matmul(L, value)
-
-    # w_t is [batch, num queries, heads, num kvs]
-    #w_t = weight.permute(0, 2, 1, 3)
-
-    #   [batch, num queries, heads, num kvs]
-    # * [batch, num queries, num kvs, depth]
-    # = [batch, num queries, heads, depth]
-    #print(weight.shape)
-    w_tr_matmul = torch.matmul(weight.unsqueeze(-2), relation).squeeze(-2)
-    #lrel =torch.matmul(L.unsqueeze(-2), relation).squeeze(-2)
-
-    # w_tr_matmul_t is [batch, heads, num queries, depth]
-    #w_tr_matmul_t = w_tr_matmul.permute(0, 2, 1, 3)
-    wp_matmul = torch.matmul(weight, position)
-    #lpos = torch.matmul(L, position)
-
-    return wv_matmul + w_tr_matmul + wp_matmul  #+ lv + lrel + lpos
-
-
 # Adapted from The Annotated Transformers
 class MultiHeadedAttention(nn.Module):
     def __init__(self, h, d_model, dropout=0.1):
@@ -194,17 +166,16 @@ class MultiHeadedAttention(nn.Module):
 
 
 # Adapted from The Annotated Transformer
-def attention_with_relations(query, key, value, relation_k, relation_v, pos_q, pos_k, pos_v, b, g, mask=None, dropout=None):
+def attention_with_relations(query, key, value, relation_k, relation_v, mask=None, dropout=None):
     "Compute 'Scaled Dot Product Attention'"
     d_k = query.size(-1)
-    scores = relative_attention_logits(query + pos_q, key + pos_k, relation_k)
+    scores = relative_attention_logits(query, key, relation_k)
     if mask is not None:
         scores = scores.masked_fill(mask == 0, -1e9)
     p_attn_orig = F.softmax(scores, dim = -1)
     if dropout is not None:
         p_attn = dropout(p_attn_orig)
-    #return relative_attention_values(p_attn, value, b * relation_v, g * pos_v), p_attn_orig
-    return relative_attention_values_with_positions(p_attn, value, b * relation_v, g * pos_v), p_attn_orig
+    return relative_attention_values(p_attn, value, relation_v), p_attn_orig
 
 
 class PointerWithRelations(nn.Module):
@@ -217,36 +188,18 @@ class PointerWithRelations(nn.Module):
 
         self.relation_k_emb = nn.Embedding(num_relation_kinds, self.hidden_size)
         self.relation_v_emb = nn.Embedding(num_relation_kinds, self.hidden_size)
-        self.my_input=torch.tensor([i for i in range(num_relation_kinds)])
 
-        #self.normk = nn.LayerNorm(self.hidden_size)
-        #self.normv = nn.LayerNorm(self.hidden_size)
-
-        self.beta = nn.Parameter(torch.ones(hidden_size))
-
-        self.linears_pos = clones(lambda: nn.Linear(hidden_size, hidden_size), 3)
-
-
-    def forward(self, query, key, value, relation, posq, poskv, mask=None):
-
+    def forward(self, query, key, value, relation, mask=None):
         relation_k = self.relation_k_emb(relation)
         relation_v = self.relation_v_emb(relation)
-
-        gamma = 1 - self.beta
-
-
-        #q, k = relation.shape[0], relation.shape[1]
-
-        #relation_k = relation_key.reshape(q, k, 256).unsqueeze(0)
-        #relation_v = relation_val.reshape(q, k, 256).unsqueeze(0)
 
         if mask is not None:
             mask = mask.unsqueeze(0)
         nbatches = query.size(0)
 
-        query, key, value = [l(x).view(nbatches, -1, 1, self.hidden_size).transpose(1, 2) for l, x in zip(self.linears, (query, key, value))]
-        
-        pos_q, pos_k, pos_v = [l(x).view(nbatches, -1, self.hidden_size) for l, x in zip(self.linears_pos, (posq, poskv, poskv))]
+        query, key, value = \
+            [l(x).view(nbatches, -1, 1, self.hidden_size).transpose(1, 2)
+             for l, x in zip(self.linears, (query, key, value))]
 
         _, self.attn = attention_with_relations(
             query,
@@ -254,11 +207,6 @@ class PointerWithRelations(nn.Module):
             value,
             relation_k,
             relation_v,
-            pos_q,
-            pos_k,
-            pos_v,
-            self.beta,
-            gamma,
             mask=mask,
             dropout=self.dropout)
 
@@ -277,31 +225,23 @@ class MultiHeadedAttentionWithRelations(nn.Module):
         self.attn = None
         self.dropout = nn.Dropout(p=dropout)
 
-        self.linears_pos = clones(lambda: nn.Linear(d_model, d_model), 3)
-
-        self.beta = nn.Parameter(torch.ones(self.d_k))
-
-
-    def forward(self, query, key, value, relation_k, relation_v, pos, mask=None):
+    def forward(self, query, key, value, relation_k, relation_v, mask=None):
         # query shape: [batch, num queries, d_model]
         # key shape: [batch, num kv, d_model]
         # value shape: [batch, num kv, d_model]
         # relations_k shape: [batch, num queries, num kv, (d_model // h)]
         # relations_v shape: [batch, num queries, num kv, (d_model // h)]
         # mask shape: [batch, num queries, num kv]
-
         if mask is not None:
             # Same mask applied to all h heads.
             # mask shape: [batch, 1, num queries, num kv]
             mask = mask.unsqueeze(1)
         nbatches = query.size(0)
 
-        gamma = 1 - self.beta
-
         # 1) Do all the linear projections in batch from d_model => h x d_k
-        query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.linears, (query, key, value))]
-
-        pos_q, pos_k, pos_v = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.linears_pos, (pos, pos, pos))]
+        query, key, value = \
+            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+             for l, x in zip(self.linears, (query, key, value))]
 
         # 2) Apply attention on all the projected vectors in batch.
         # x shape: [batch, heads, num queries, depth]
@@ -311,19 +251,12 @@ class MultiHeadedAttentionWithRelations(nn.Module):
             value,
             relation_k,
             relation_v,
-            pos_q,
-            pos_k,
-            pos_v,
-            self.beta,
-            gamma,
             mask=mask,
             dropout=self.dropout)
 
         # 3) "Concat" using a view and apply a final linear.
         x = x.transpose(1, 2).contiguous() \
              .view(nbatches, -1, self.h * self.d_k)
-
-    
         return self.linears[-1](x)
 
 
@@ -341,10 +274,10 @@ class Encoder(nn.Module):
          
          # TODO initialize using xavier
         
-    def forward(self, x, relation, pos, mask):
+    def forward(self, x, relation, mask):
         "Pass the input (and mask) through each layer in turn."
         for layer in self.layers:
-            x = layer(x, relation, pos, mask)
+            x = layer(x, relation, mask)
         return self.norm(x)
 
 
@@ -376,20 +309,16 @@ class EncoderLayer(nn.Module):
 
         self.relation_k_emb = nn.Embedding(num_relation_kinds, self.self_attn.d_k)
         self.relation_v_emb = nn.Embedding(num_relation_kinds, self.self_attn.d_k)
-        #self.normk = nn.LayerNorm(self.self_attn.d_k)
-        #self.normv = nn.LayerNorm(self.self_attn.d_k)
+        
+        #self.my_input=torch.tensor([i for i in range(num_relation_kinds)])
 
-        self.my_input=torch.tensor([i for i in range(num_relation_kinds)])
-
-
-    def forward(self, x, relation, pos, mask):
+    def forward(self, x, relation, mask):
         "Follow Figure 1 (left) for connections."
-        relation_k = heading_relation2_17(self.relation_k_emb(relation), 8, self.relation_k_emb(self.my_input))
-        relation_v = heading_relation2_17(self.relation_v_emb(relation), 8, self.relation_v_emb(self.my_input))
+        #spread_relations_through_heads(relation, 8, self.relation_k_emb)
+        relation_k = spread_relations_through_heads(self.relation_k_emb(relation), 8, self.relation_k_emb)
+        relation_v = spread_relations_through_heads(self.relation_v_emb(relation), 8, self.relation_v_emb)
 
-
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, relation_k, relation_v, pos, mask))
-
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, relation_k, relation_v, mask))
         return self.sublayer[1](x, self.feed_forward)
 
 
@@ -405,73 +334,36 @@ class PositionwiseFeedForward(nn.Module):
     def forward(self, x):
         return self.w_2(self.dropout(F.relu(self.w_1(x))))
 
+import torch
 
+def spread_relations_through_heads(relation, num_heads, embedding_lookup):
+    """
+    Spreads relations across attention heads using Hadamard masking in PyTorch.
 
+    Args:
+        relation (Tensor): shape (query, key, feature)
+        num_heads (int): number of heads
+        embedding_lookup (callable): embedding lookup function by index
 
-def masking(relation, space_embedding, debut, fin):
-    # t shape is (number of indices, features)
-    mask=torch.zeros_like(relation)
-    for i in range (debut, fin):
-        mask+=(relation==space_embedding[i])
-    return mask
+    Returns:
+        Tensor: r_out of shape (num_heads, query, key, feature)
+    """
+    query_len, key_len, feature_dim = relation.shape
 
+    # Step 8: Initialize output
+    r_out = torch.zeros((num_heads, query_len, key_len, feature_dim), dtype=relation.dtype)
 
-def heading_relation2_17(relation, head, space_embedding):
-#t shape is (number of indice, features)
-    q, k, f=relation.shape
-    r=torch.empty(head, q, k, f)
-    rr=torch.zeros_like(r)
-    rr[7]=relation #rr[0]=0 #None
-    for i in range (0, head-1):
-        if(i==0): #None
-            mask = masking(relation, space_embedding, 0, 1)
-            rr[i]=relation*mask
-        if (i==1):#SD
-            mask = masking(relation, space_embedding, 1, 3)
-            rr[i]=relation*mask
+    # Step 9: First head keeps original relation
+    r_out[0] = relation
 
-        elif (i==2):#s_enc
-            mask = masking(relation, space_embedding, 7, 17)
-            rr[i]=relation*mask
+    # Step 10–12: Spread to other heads using mask
+    for i in range(1, num_heads):
+        embedding_i = embedding_lookup(i)  # (feature_dim,)
+        # Step 11: Create boolean mask where relation == embedding_i
+        mask = torch.all(relation == embedding_i.view(1, 1, -1), dim=-1)  # shape: (query, key)
 
-        elif (i==3):#s_link
-            mask = masking(relation, space_embedding, 3, 7)
-            rr[i]=relation*mask
+        # Step 12: Hadamard product with broadcasted mask
+        mask = mask.unsqueeze(-1).expand(-1, -1, feature_dim)  # shape: (query, key, feature)
+        r_out[i] = relation * mask  # Keep values where mask is True, else zero
 
-        elif (i==4):#{SD, S_enc}
-            mask1 = masking(relation, space_embedding, 1, 3)
-            mask2 = masking(relation, space_embedding, 7, 17)
-            mask=mask1+mask2
-            rr[i]=relation*mask
-
-        elif (i==5):#{SD, S_link}
-            mask = masking(relation, space_embedding, 1, 7)
-            #mask2 = masking(relation, space_embedding, 1, 7)
-
-            rr[i]=relation*mask
-        elif (i==6):#{S_enc, S_link}
-            mask = masking(relation, space_embedding, 3, 17)
-            rr[i]=relation*mask
-    return rr
-
-
-def heading_Relation_Pointer(relation, head, space_embedding):
-#t shape is (number of indice, features) head = 4
-    q, k, f=relation.shape
-    r=torch.empty(head, q, k, f)
-    rr=torch.zeros_like(r)
-    rr[3]=relation #rr[0]=0 #None
-    for i in range (0, head-1):
-        if(i==0): #None
-            mask = masking(relation, space_embedding, 0, 1)
-            rr[i]=relation*mask
-
-        elif (i==1):#s_enc
-            mask = masking(relation, space_embedding, 7, 17)
-            rr[i]=relation*mask
-
-        elif (i==2):#s_link
-            mask = masking(relation, space_embedding, 3, 7)
-            rr[i]=relation*mask
-    return rr
-
+    return r_out
