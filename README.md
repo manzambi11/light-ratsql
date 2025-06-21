@@ -22,16 +22,19 @@ NM Ndongala - Texila Int. J. Acad. Res, 2023
 ## 🚀 Quick Start
 1. Follow steps from [RAT-SQL](https://github.com/microsoft/rat-sql)
 2. Install spacy  
-3. Getting Light RAT-SQL updated from specific RAT-SQL files:
+3. Getting Light RAT-SQL updated files from specific RAT-SQL files:
    
 Change of preexisting computation, reducing from 50+ to 7 : 
 
 - \light_ratsql\models\spider\spider_enc_modules.py 
 
-compute_syntax_dependancy (forward and backward relation) using spacy
+Compute_syntax_dependancy (forward and backward relation) using spacy
 
 - \light_ratsql\models\spider\spider_enc.py 
 - \light_ratsql\models\spider\spider_match_utils.py
+
+Spreading relation through heads before Transformer Computation 
+- \light_ratsql\models\transformer.py
 
 ## Acknowledgment
 This project builds upon RAT-SQL by Microsoft Research, licensed under the MIT License.
