@@ -1,0 +1,1277 @@
+import copy
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.init as init
+import torch.nn.functional as F
+import entmax
+import networkx as nx
+import numpy as np
+import scipy.sparse as sp
+
+
+
+from torch_geometric.nn import ChebConv  # Chebyshev Convolutional Layer
+from torch_geometric.data import Data
+
+class ChebNet(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, K, dropout):
+        super(ChebNet, self).__init__()
+        # Define Chebyshev Convolution layer with K Chebyshev polynomials
+        self.conv1 = ChebConv(in_channels, out_channels, K)
+        self.dropout = torch.nn.Dropout(p=dropout)
+
+    def forward(self, x, L):
+
+        # Step 1: Find the indices of non-zero elements (edges)
+        row, col = torch.nonzero(L, as_tuple=True)
+
+        # Step 2: Stack the row and column indices to form edge_index in COO format
+        edge_index = torch.stack([row, col], dim=0)
+        
+        # Apply Chebyshev convolution and activation function
+        x = self.dropout(self.conv1(x, edge_index))
+        #return F.relu(x)
+        return x
+
+
+
+
+def maskingHope(relation, space_embedding, hope, debut, fin, base=22):
+    mask=torch.zeros_like(relation)
+    for h in range (1, hope+1):
+        for i in range (debut, fin):
+            mask+=(relation==space_embedding[base + (h - 1) * 12 + i])
+    return mask
+
+def heading_relation3(relation, head, space_embedding, hope):
+#t shape is (number of indice, features)
+    q, k, f=relation.shape
+    r=torch.empty(head, q, k, f)
+    rr=torch.zeros_like(r)
+    rr[7]=relation #rr[0]=0 #None
+    for i in range (0, head-1):
+        if(i==0): #None
+            mask = masking(relation, space_embedding, 0, 1)
+            rr[i]=relation*mask
+        if (i==1):#SD
+            mask1 = masking(relation, space_embedding, 1, 3)
+            mask2 = maskingHope(relation, space_embedding, hope, 1, 3)
+            mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==2):#s_enc
+            mask1 = masking(relation, space_embedding, 13, 23)
+            mask2 = maskingHope(relation, space_embedding, hope, 7, 13)
+            mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==3):#s_link
+            mask1 = masking(relation, space_embedding, 3, 13)
+            mask2 = maskingHope(relation, space_embedding, hope, 3, 7)
+            mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==4):#{SD, S_enc}
+            mask1 = masking(relation, space_embedding, 1, 3)
+            mask2 = masking(relation, space_embedding, 13, 23)
+
+
+            mask3 = maskingHope(relation, space_embedding, hope, 1, 3)
+            mask4 = maskingHope(relation, space_embedding, hope, 7, 13)
+            mask=mask1+mask2+mask3+mask4
+            rr[i]=relation*mask
+
+        elif (i==5):#{SD, S_link}
+            mask1 = masking(relation, space_embedding, 1, 13)
+            #mask2 = masking(relation, space_embedding, 1, 7)
+            mask2 = maskingHope(relation, space_embedding, hope, 1, 7)
+            mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==6):#{S_enc, S_link}
+            mask1 = masking(relation, space_embedding, 3, 23)
+            mask2 = maskingHope(relation, space_embedding, hope, 3, 13)
+            mask = mask1 + mask2
+            rr[i]=relation*mask
+    return rr
+
+def heading_relation2(relation, head, space_embedding):
+#t shape is (number of indice, features)
+    q, k, f=relation.shape
+    r=torch.empty(head, q, k, f)
+    rr=torch.zeros_like(r)
+    rr[7]=relation #rr[0]=0 #None
+    for i in range (0, head-1):
+        if(i==0): #None
+            mask = masking(relation, space_embedding, 0, 1)
+            rr[i]=relation*mask
+        if (i==1):#SD
+            mask = masking(relation, space_embedding, 1, 3)
+            #mask2 = maskingHope(relation, space_embedding, hope, 1, 3)
+            #mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==2):#s_enc
+            mask = masking(relation, space_embedding, 9, 19)
+            #mask2 = maskingHope(relation, space_embedding, hope, 7, 13)
+            #mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==3):#s_link
+            mask = masking(relation, space_embedding, 3, 9)
+            #mask2 = maskingHope(relation, space_embedding, hope, 3, 7)
+            #mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==4):#{SD, S_enc}
+            mask1 = masking(relation, space_embedding, 1, 3)
+            mask2 = masking(relation, space_embedding, 9, 19)
+
+
+            #mask3 = maskingHope(relation, space_embedding, hope, 1, 3)
+            #mask4 = maskingHope(relation, space_embedding, hope, 7, 13)
+            mask=mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==5):#{SD, S_link}
+            mask = masking(relation, space_embedding, 1, 9)
+            #mask2 = masking(relation, space_embedding, 1, 7)
+            #mask2 = maskingHope(relation, space_embedding, hope, 1, 7)
+            #mask = mask1 + mask2
+            rr[i]=relation*mask
+
+        elif (i==6):#{S_enc, S_link}
+            mask = masking(relation, space_embedding, 3, 19)
+            #mask2 = maskingHope(relation, space_embedding, hope, 3, 13)
+            #mask = mask1 + mask2
+            rr[i]=relation*mask
+    return rr
+
+
+def heading_relation(relation, head, emb):
+    q, k, f=relation.shape
+    r=torch.empty(head, q, k, f)
+    rr=torch.zeros_like(r)
+    rr[0]=relation
+    for i in range (1, head):
+        t=emb(torch.tensor(i))
+        mask=(relation==t)
+        rr[i]=mask*relation
+    return rr
+
+def spectral_layout(adjacency_matrix):
+    # Convert the adjacency matrix to a NetworkX graph
+    #graph = nx.from_numpy_matrix(adjacency_matrix)
+    graph = nx.from_numpy_array(((adjacency_matrix + np.eye(adjacency_matrix.shape[0]))> 0).astype(int) )
+
+    # Compute the Laplacian matrix
+    #laplacian_mat = nx.laplacian_matrix(graph).todense()
+    laplacian_mat = nx.normalized_laplacian_matrix(graph).todense()
+
+    # Compute the eigenvalues and eigenvectors of the Laplacian matrix
+    eigenvalues, eigenvectors = np.linalg.eigh(laplacian_mat)
+
+    # Sort the eigenvectors based on eigenvalues
+    sorted_indices = np.argsort(eigenvalues)
+    sorted_eigenvectors = eigenvectors[:, sorted_indices]
+
+    # Extract the second and third smallest eigenvectors (excluding the first, which is constant)
+    pos3D = sorted_eigenvectors[:, 1:4]
+
+    return pos3D
+
+def masking(relation, space_embedding, debut, fin):
+    # t shape is (number of indices, features)
+    mask=torch.zeros_like(relation)
+    for i in range (debut, fin):
+        mask+=(relation==space_embedding[i])
+    return mask
+
+def heading_relation2_17(relation, head, space_embedding):
+#t shape is (number of indice, features)
+    q, k, f=relation.shape
+    r=torch.empty(head, q, k, f)
+    rr=torch.zeros_like(r)
+    rr[7]=relation #rr[0]=0 #None
+    for i in range (0, head-1):
+        if(i==0): #None
+            mask = masking(relation, space_embedding, 0, 1)
+            rr[i]=relation*mask
+        if (i==1):#SD
+            mask = masking(relation, space_embedding, 1, 3)
+            rr[i]=relation*mask
+
+        elif (i==2):#s_enc
+            mask = masking(relation, space_embedding, 7, 17)
+            rr[i]=relation*mask
+
+        elif (i==3):#s_link
+            mask = masking(relation, space_embedding, 3, 7)
+            rr[i]=relation*mask
+
+        elif (i==4):#{SD, S_enc}
+            mask1 = masking(relation, space_embedding, 1, 3)
+            mask2 = masking(relation, space_embedding, 7, 17)
+            mask=mask1+mask2
+            rr[i]=relation*mask
+
+        elif (i==5):#{SD, S_link}
+            mask = masking(relation, space_embedding, 1, 7)
+            #mask2 = masking(relation, space_embedding, 1, 7)
+            
+            rr[i]=relation*mask
+        elif (i==6):#{S_enc, S_link}
+            mask = masking(relation, space_embedding, 3, 17)
+            rr[i]=relation*mask
+    return rr
+
+def heading_Relation_Pointer(relation, head, space_embedding):
+#t shape is (number of indice, features) head = 4
+    q, k, f=relation.shape
+    r=torch.empty(head, q, k, f)
+    rr=torch.zeros_like(r)
+    rr[3]=relation #rr[0]=0 #None
+    for i in range (0, head-1):
+        if(i==0): #None
+            mask = masking(relation, space_embedding, 0, 1)
+            rr[i]=relation*mask
+
+        elif (i==1):#s_enc
+            mask = masking(relation, space_embedding, 7, 17)
+            rr[i]=relation*mask
+
+        elif (i==2):#s_link
+            mask = masking(relation, space_embedding, 3, 7)
+            rr[i]=relation*mask
+    return rr
+
+def tensor_laplacian2(R):
+    # Assume R is of shape (head, node, node, features)
+    h, n, _, f = R.shape
+    
+    # Step 1: Multiply R by -1
+    R_neg = -1 * R
+    
+    # Step 2: Sum along axis 2 (summing outgoing edges across nodes)
+    R_sum = torch.sum(R, axis=2)  # Shape (head, node, features)
+    
+    # Step 3: Set diagonal elements in R_neg to R_sum for each head
+    for head in range(h):
+        for i in range(n):
+            R_neg[head, i, i, :] = R_sum[head, i, :]
+    # Step 4: Set L_R as the updated R_neg
+    
+    L_R = R_neg
+    #print("Laplacian-like tensor L_R:\n", L_R)
+    return L_R
+
+def tensor_laplacian(R, epsilon=1e-6):
+    # Assume R is of shape (head, node, node, features)
+    h, n, _, f = R.shape
+
+    # Step 1: Multiply R by -1 (this can be done directly with in-place operation)
+    R_neg = -R
+
+    # Step 2: Sum along axis 2 (summing outgoing edges across nodes)
+    R_sum = torch.sum(R, axis=2)  # Shape (head, node, features)
+
+    # Step 3: Set diagonal elements to R_sum for each head
+    diag_indices = torch.arange(n)
+    R_neg[:, diag_indices, diag_indices, :] = R_sum  # Vectorized operation
+
+    # Step 4: Compute the norm of the diagonal vector (along features dimension)
+    # This will give us a diagonal norm tensor of shape (head, node)
+    #diag_norm = torch.norm(R_sum, dim=2)  # Shape (head, node)
+
+    # Step 5: Normalize by diagonal norm
+    # To avoid division by zero, we add epsilon to the diagonal norm
+    #diag_norm = diag_norm + epsilon  # Shape (head, node)
+
+    # Reshape diag_norm for broadcasting
+    #diag_norm_expanded = diag_norm.unsqueeze(2).unsqueeze(3)  # Shape (head, node, 1, 1)
+
+    # Normalize the entire tensor by the diagonal norm
+    R_norm = R_neg / math.sqrt(n)  # Shape (head, node, node, features)
+    # Step 4: R_norm is the updated R_neg
+    return R_norm
+
+def general_relative_attention_logits(query, key, relation):
+    # We can't reuse the same logic as tensor2tensor because we don't share relation vectors across the batch.
+    # In this version, relation vectors are shared across heads.
+    # query: [batch, heads, num queries, depth].
+    # key: [batch, heads, num kvs, depth].
+    # relation: [batch, num queries, num kvs, depth].
+
+    # qk_matmul is [batch, heads, num queries, num kvs]
+
+    qk_matmul = torch.matmul(query, key.transpose(-2, -1))
+    # q_t is [batch, num queries, heads, depth]
+    #q_t = query.permute(0, 2, 1, 3)
+
+    # r_t is [batch, num queries, depth, num kvs]
+    r_t = relation.transpose(-2, -1)#.unsqueeze(0)
+
+    #   [batch, num queries, heads, depth]
+    # * [batch, num queries, depth, num kvs]
+    # = [batch, num queries, heads, num kvs]
+    # For each batch and query, we have a query vector per head.
+    # We take its dot product with the relation vector for each kv.
+
+    q_tr_t_matmul = torch.matmul(query.unsqueeze(-2), r_t)
+
+    # qtr_t_matmul_t is [batch, heads, num queries, num kvs]
+    #q_tr_tmatmul_t = q_tr_t_matmul.permute(0, 2, 1, 3)
+    q_tr_tmatmul_t = q_tr_t_matmul.squeeze(-2)
+    
+    ######################################################
+    #relation: [batch,  num kvs, num queries, depth].
+    
+    r_query = relation.transpose(1, 2)
+
+    r_kt = torch.matmul(r_query, key.unsqueeze(-1))
+    r_kt_t = r_kt.squeeze(-1).transpose(-1, -2)
+
+	
+    return (qk_matmul + q_tr_tmatmul_t + r_kt_t + 1) / math.sqrt(query.shape[-1])
+
+# Adapted from
+# https://github.com/tensorflow/tensor2tensor/blob/0b156ac533ab53f65f44966381f6e147c7371eee/tensor2tensor/layers/common_attention.py
+def relative_attention_logits(query, key, relation):
+    # We can't reuse the same logic as tensor2tensor because we don't share relation vectors across the batch.
+    # In this version, relation vectors are shared across heads.
+    # query: [batch, heads, num queries, depth].
+    # key: [batch, heads, num kvs, depth].
+    # relation: [batch, num queries, num kvs, depth].
+
+    # qk_matmul is [batch, heads, num queries, num kvs]
+
+    qk_matmul = torch.matmul(query, key.transpose(-2, -1))
+    # q_t is [batch, num queries, heads, depth]
+    #q_t = query.permute(0, 2, 1, 3)
+
+    # r_t is [batch, num queries, depth, num kvs]
+    r_t = relation.transpose(-2, -1).unsqueeze(0)
+
+    #   [batch, num queries, heads, depth]
+    # * [batch, num queries, depth, num kvs]
+    # = [batch, num queries, heads, num kvs]
+    # For each batch and query, we have a query vector per head.
+    # We take its dot product with the relation vector for each kv.
+    #print(query.shape)
+    #print(r_t.shape)
+    q_tr_t_matmul = torch.matmul(query.unsqueeze(-2), r_t)
+
+    # qtr_t_matmul_t is [batch, heads, num queries, num kvs]
+    #q_tr_tmatmul_t = q_tr_t_matmul.permute(0, 2, 1, 3)
+    q_tr_tmatmul_t = q_tr_t_matmul.squeeze(-2)
+
+    
+    return (qk_matmul + q_tr_tmatmul_t) / math.sqrt(query.shape[-1])
+
+def relative_attention_values(weight, value, relation):
+    # In this version, relation vectors are shared across heads.
+    # weight: [batch, heads, num queries, num kvs].
+    # value: [batch, heads, num kvs, depth].
+    # relation: [batch, num queries, num kvs, depth].
+
+    # wv_matmul is [batch, heads, num queries, depth]
+    wv_matmul = torch.matmul(weight, value)
+
+    # w_t is [batch, num queries, heads, num kvs]
+    #w_t = weight.permute(0, 2, 1, 3)
+
+    #   [batch, num queries, heads, num kvs]
+    # * [batch, num queries, num kvs, depth]
+    # = [batch, num queries, heads, depth]
+    #print(weight.shape)
+    w_tr_matmul = torch.matmul(weight.unsqueeze(-2), relation).squeeze(-2)
+
+    # w_tr_matmul_t is [batch, heads, num queries, depth]
+    #w_tr_matmul_t = w_tr_matmul.permute(0, 2, 1, 3)
+
+    return wv_matmul + w_tr_matmul
+
+
+
+
+def disantangle_attention_logits(query_content, key_content, relation_q, relation_k, pos_query, pos_key):
+    head, q, k, dl = relation_q.shape
+    
+    alpha = torch.matmul(query_content, key_content.transpose(-2, -1)) / math.sqrt(dl)
+    
+    beta = torch.matmul(pos_query, pos_key.transpose(-2, -1)) / math.sqrt(dl)
+    
+    # r_t is [head, q, features, k]
+    
+    r_t = relation_k.transpose(-2, -1)#.unsqueeze(0)
+    
+    q_tr_t_matmul = torch.matmul(query_content.unsqueeze(-2), r_t)
+    
+    query_relation = q_tr_t_matmul.squeeze(-2)
+    
+    # r_t is [head, k, q, features]
+    r_query = relation_q.transpose(1, 2)
+    r_kt = torch.matmul(r_query, key_content.unsqueeze(-1))
+    relation_key = r_kt.squeeze(-1).transpose(-1, -2)
+    
+    gamma = query_relation / math.sqrt(dl)
+
+    theta = relation_key / math.sqrt(dl)
+    
+    # Step 1: Concatenate along the last dimension to get a shape of (q, 3k)
+    concatenated = torch.cat((alpha, beta, gamma, theta), dim=-1)
+    
+    # Step 2: Apply softmax along the last dimension (i.e., dimension -1)
+    att_weight = torch.softmax(concatenated, dim=-1)
+    
+    # Step 3: Split the result back into three tensors of shape (q, k)
+    
+    alpha_softmax, beta_softmax, gamma_softmax, theta_softmax = torch.split(att_weight, k, dim=-1)
+    
+    return alpha_softmax, beta_softmax, gamma_softmax, theta_softmax
+
+def disantangle_attention_values(alpha, beta, gamma, theta, content, relation, position):
+
+    wc_matmul = torch.matmul(alpha, content)
+	
+    wp_matmul = torch.matmul(beta, position)
+
+    wr_matmul = torch.matmul(gamma.unsqueeze(-2), relation).squeeze(-2)
+
+    gc_matmul = torch.matmul(theta, content)
+
+    return wc_matmul + wp_matmul + wr_matmul + gc_matmul
+
+def relative_attention_values_with_positions(weight, value, relation, position):
+    # In this version, relation vectors are shared across heads.
+    # weight: [batch, heads, num queries, num kvs].
+    # value: [batch, heads, num kvs, depth].
+    # relation: [batch, num queries, num kvs, depth].
+
+    # wv_matmul is [batch, heads, num queries, depth]
+    wv_matmul = torch.matmul(weight, value)
+    #lv =torch.matmul(L, value)
+
+    # w_t is [batch, num queries, heads, num kvs]
+    #w_t = weight.permute(0, 2, 1, 3)
+
+    #   [batch, num queries, heads, num kvs]
+    # * [batch, num queries, num kvs, depth]
+    # = [batch, num queries, heads, depth]
+    #print(weight.shape)
+    w_tr_matmul = torch.matmul(weight.unsqueeze(-2), relation).squeeze(-2)
+    #lrel =torch.matmul(L.unsqueeze(-2), relation).squeeze(-2)
+
+    # w_tr_matmul_t is [batch, heads, num queries, depth]
+    #w_tr_matmul_t = w_tr_matmul.permute(0, 2, 1, 3)
+    wp_matmul = torch.matmul(weight, position)
+    #lpos = torch.matmul(L, position)
+
+    return wv_matmul + w_tr_matmul + wp_matmul  #+ lv + lrel + lpos
+
+# Adapted from The Annotated Transformer
+def clones(module_fn, N):
+    return nn.ModuleList([module_fn() for _ in range(N)])
+
+
+def attention(query, key, value,  mask=None, dropout=None):
+    "Compute 'Scaled Dot Product Attention'"
+    d_k = query.size(-1)
+    
+    # point wise multiplication of the mixing coefficient per head with the shared query projection
+    # (batch, seq, dim) x (head, dim) -> (batch, head, seq, dim)
+    #if mixing is not None:
+    #    query = query[..., None, :, :] * mixing[..., :, None, :]
+        # broadcast the shared key for all the heads
+        # (batch, 1, to_seq, dim)
+    #    key = key[..., None, :, :]
+
+    scores = torch.matmul(query, key.transpose(-2, -1)) \
+             / math.sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+    p_attn = F.softmax(scores, dim = -1)
+    if dropout is not None:
+        p_attn = dropout(p_attn)
+    # return torch.matmul(p_attn, value), scores.squeeze(1).squeeze(1)
+    return torch.matmul(p_attn, value), p_attn
+
+def sparse_attention(query, key, value, alpha, mask=None, dropout=None):
+    "Compute 'Scaled Dot Product Attention'"
+    d_k = query.size(-1)
+    scores = torch.matmul(query, key.transpose(-2, -1)) \
+             / math.sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+    if alpha == 2:
+        p_attn = entmax.sparsemax(scores, -1)
+    elif alpha == 1.5:
+        p_attn = entmax.entmax15(scores, -1)
+    else:
+        raise NotImplementedError
+    if dropout is not None:
+        p_attn = dropout(p_attn)
+    # return torch.matmul(p_attn, value), scores.squeeze(1).squeeze(1)
+    return torch.matmul(p_attn, value), p_attn
+
+# Adapted from The Annotated Transformers
+class MultiHeadedAttention(nn.Module):
+    def __init__(self, h, d_model, dropout=0.1):
+        "Take in model size and number of heads."
+        super(MultiHeadedAttention, self).__init__()
+        assert d_model % h == 0
+        # We assume d_v always equals d_k
+        self.d_k = d_model // h
+        self.h = h
+        self.linears = clones(lambda: nn.Linear(d_model, d_model), 4)
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+    
+
+    def forward(self, query, key, value, mask=None):
+        "Implements Figure 2"
+        if mask is not None:
+            # Same mask applied to all h heads.
+            mask = mask.unsqueeze(1)
+        nbatches = query.size(0)
+
+        # 1) Do all the linear projections in batch from d_model => h x d_k
+        query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.linears, (query, key, value))]
+
+        # 2) Apply attention on all the projected vectors in batch.
+        x, self.attn = attention(query, key, value, mask=mask,
+                                 dropout=self.dropout)
+
+        # 3) "Concat" using a view and apply a final linear.
+        x = x.transpose(1, 2).contiguous() \
+             .view(nbatches, -1, self.h * self.d_k)
+        if query.dim() == 3:
+            x = x.squeeze(1)
+        return self.linears[-1](x)
+
+
+# Adapted from The Annotated Transformer
+def attention_with_relations(content_query, content_key, content_value, rq, rk, rv,  pos_query, pos_key, pos_value,b,g, mask=None, dropout=None):
+    "Compute 'Scaled Dot Product Attention'"
+    d_k = content_query.size(-1)
+
+    scores = relative_attention_logits(content_query + pos_query, content_key + pos_key, rk)
+    #scores = relative_attention_logits(content_query, content_key + pos_key, relation_k)
+    #alpha, beta, gamma, theta = disantangle_attention_logits(content_query, content_key, rq, rk, pos_query, pos_key)
+    #scores = general_relative_attention_logits(content_query + pos_query, content_key + pos_key, relation_k)
+    
+    #scores_beta = relative_attention_logits(content_query, content_key, relation_k)
+    #scores_gamma = relative_attention_logits(pos_query, pos_key, relation_k)
+ 
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+    p_attn_orig = F.softmax(scores, dim = -1)
+
+    #p_attn_orig =  alpha + beta + gamma + theta
+
+    
+    
+    #p_attn_orig = F.softmax((scores_beta + scores_gamma)/math.sqrt(2), dim = -1)
+    #p_attn_orig = F.softmax((beta * scores_beta + gamma * scores_gamma), dim = -1)
+
+    if dropout is not None:
+        p_attn_orig  = dropout(p_attn_orig)
+        #p_attn_orig_gamma = dropout(p_attn_orig_gamma)
+    
+
+    #return beion_v) + gammav * relative_attention_values(p_attn_orig, pos_value, relation_v)
+    #return relative_attention_values_with_positions(p_attn_orig, content_value, b * relation_v,  g * pos_value), p_attn_orig
+    return relative_attention_values(p_attn_orig, content_value + pos_value, rv), p_attn_orig
+    #return disantangle_attention_values(alpha, beta, gamma, theta, content_value, rv, pos_value), p_attn_orig
+
+
+class PointerWithRelations(nn.Module):
+    def __init__(self, hidden_size, num_relation_kinds, dropout=0.2):
+        super(PointerWithRelations, self).__init__()
+        self.hidden_size = hidden_size
+
+
+        self.linears = clones(lambda: nn.Linear(hidden_size, self.hidden_size), 3)
+        #self.ChebNet = clones(lambda: ChebNet(32, self.hidden_size, 2, dropout), 2)
+        #self.ChebNetQ = ChebNet(self.hidden_size, self.hidden_size, 2, dropout)
+        self.linears_pos = clones(lambda: nn.Linear(hidden_size, self.hidden_size), 3)
+        #self.linears_pos = nn.Linear(hidden_size, self.hidden_size)
+        
+        self.dropout = nn.Dropout(p=dropout)
+
+        self.relation_q_emb = nn.Embedding(num_relation_kinds, self.hidden_size//4)
+        self.relation_k_emb = nn.Embedding(num_relation_kinds, self.hidden_size//4)
+        self.relation_v_emb = nn.Embedding(num_relation_kinds, self.hidden_size//4)
+
+        #ChebNet with K=1 is like FFN
+        #self.chebNet = clones(lambda: nn.Linear(hidden_size//4, self.hidden_size//4), 2)
+        
+        #self.my_input=torch.tensor([0,1,2,3,4,5,6,7,8, 9, 10, 11, 12, 13, 14, 15, 16])
+        self.my_input=torch.tensor([i for i in range(num_relation_kinds )])
+        #self.beta = nn.Parameter(torch.tensor(0.5))
+
+
+    def forward(self, query, key, value, relq, relation, posq, posk, posv, mask=None):
+        # # relation: [batch, num queries, num kvs]
+
+        q, k = relation.shape[0], relation.shape[1]
+
+        #Make relation specialize per head.
+        rel_head = spreading_relation_Pointer(relation, 4)
+
+        #Getting embedding and linear transformation (chebNet with k=1 == FFN)
+        rq = self.relation_q_emb(rel_head)
+        rk = self.relation_k_emb(rel_head)#.unsqueeze(0)
+        rv = self.relation_v_emb(rel_head)#.unsqueeze(0)
+
+        # Return back to initial size, we dont need head during Pointer computation
+        relation_query = rq.permute(1, 2, 0, 3).reshape(q, -1, 256).unsqueeze(0)
+        relation_key = rk.permute(1, 2, 0, 3).reshape(q, k, 256).unsqueeze(0)
+        relation_val = rv.permute(1, 2, 0, 3).reshape(q, k, 256).unsqueeze(0)
+
+        #relation_key = heading_Relation_Pointer(rk, 4, self.relation_k_emb(self.my_input)).permute(1, 2, 0, 3)
+        #q, k = relation_key.shape[0], relation_key.shape[1]
+        #relation_key = relation_key.reshape(q, k, 256).unsqueeze(0)
+
+        #relation_val = heading_Relation_Pointer(rv, 4, self.relation_v_emb(self.my_input)).permute(1, 2, 0, 3).reshape(q, k, 256).unsqueeze(0)
+
+        #beta = torch.sigmoid(self.beta)
+        #gamma = 1 - beta
+
+        #betav = torch.sigmoid(self.betav)
+        #gammav = 1 - betav
+
+        #B = A.mean(dim=(0, 1), keepdim=True).squeeze(0)
+
+
+        if mask is not None:
+            mask = mask.unsqueeze(0)
+        nbatches = query.size(0)
+
+        #queries = self.ChebNetQ(query, relation >0).view(nbatches, -1, self.hidden_size)
+
+        queries, keys, values = [l(x).view(nbatches, -1, self.hidden_size) for l, x in zip(self.linears, (query, key, value))]
+
+        pos_q, pos_k, pos_v = [l(x).view(nbatches, -1, self.hidden_size) for l, x in zip(self.linears_pos, (posq, posk, posv))]
+        #_, self.attn = attention(queries, keys, values, mask=mask, dropout=self.dropout)
+
+        #pos_k, pos_v = [l(x, relation[:k, :k]>0).view(nbatches, -1, self.hidden_size) for l, x in zip(self.ChebNet, (posk, posv))]
+        
+        #syntax_vec = betav * relation_val + gammav * pos_v.squeeze(0)
+
+
+        #_, self.attn = attention_with_relations(queries,keys,values,relation_key,relation_val,pos_q,pos_k,pos_v,betav,gammav,\
+        #        mask=mask,dropout=self.dropout)
+
+        _, self.attn = attention_with_relations(queries,keys,values, relation_query, relation_key,relation_val, pos_q, pos_k, pos_v, None, None,\
+                mask=mask,dropout=self.dropout)
+
+
+        #return self.attn.squeeze(0), relation_val.mean(dim=(0, 1), keepdim=True).squeeze(0)
+        #print(self.attn.shape)
+        #return self.attn[0] #, self.attn_gamma.squeeze(0)
+        return self.attn[0, 0]
+
+# Adapted from The Annotated Transformer
+class MultiHeadedAttentionWithRelations(nn.Module):
+    def __init__(self, h, d_model, dropout=0.1):
+        "Take in model size and number of heads."
+        super(MultiHeadedAttentionWithRelations, self).__init__()
+        assert d_model % h == 0
+        # We assume d_v always equals d_k
+        #self.hope = 2
+        self.d_k = d_model // h
+    
+        self.h = h
+        self.linears = clones(lambda: nn.Linear(d_model, d_model), 1)
+        #self.ChebNet = clones(lambda: ChebNet(32, d_model, 2, dropout), 2)
+        #self.chebNet = ChebNet(d_model, d_model, 2)
+        
+        self.linears_qkv = clones(lambda: nn.Linear(d_model, d_model), 3)
+        self.linears_pos = clones(lambda: nn.Linear(d_model, d_model), 3)
+        #self.linears_pos = nn.Linear(d_model, d_model)
+        
+
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+        #self.mixing = init_mixing_matrix(self.h, self.d_k, 3, 0.2)
+
+        #self.content_bias = nn.Linear(self.d_k*2 , 1)
+        #self.beta = nn.Parameter(torch.tensor(0.5))
+        #self.betav = nn.Parameter(torch.tensor(0.5))
+
+
+    def forward(self, query, key, value, relation_q, relation_k, relation_v, pos, mask=None):
+        
+        #beta = torch.sigmoid(self.beta)
+        #gamma = 1 - beta
+
+        #betav = torch.sigmoid(self.betav)
+        #gammav = 1 - betav
+
+        # query shape: [batch, num queries, d_model]
+        # key shape: [batch, num kv, d_model]
+        # value shape: [batch, num kv, d_model]
+        # relations_k shape: [batch, num queries, num kv, (d_model // h)]
+        # relations_v shape: [batch, num queries, num kv, (d_model // h)]
+        # mask shape: [batch, num queries, num kv]
+        if mask is not None:
+            # Same mask applied to all h heads.
+            # mask shape: [batch, 1, num queries, num kv]
+            mask = mask.unsqueeze(1)
+        nbatches = 1 #query.size(0)
+
+        #content_bias = self.content_bias(torch.cat([relation_q, relation_k], dim=-1))
+        #print(nbatches)
+
+        # 1) Do all the linear projections in batch from d_model => h x d_k
+
+        query, key, value   = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.linears_qkv, (query, key, value))]
+
+        pos_q, pos_k, pos_v = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.linears_pos, (pos, pos, pos))]
+        
+        #pos_k, pos_v = [l(x, relation).view(nbatches, -1, self.h, self.d_k).transpose(1, 2) for l, x in zip(self.ChebNet, (pos, pos))]
+
+
+        # 2) Apply attention on all the projected vectors in batch.
+        # x shape: [batch, heads, num queries, depth]
+        x, _ = attention_with_relations(
+            query,
+            key,
+            value,
+            relation_q,
+            relation_k,
+            relation_v,
+            pos_q,
+            pos_k,
+            pos_v,
+            None,
+            None,
+            mask=mask,
+            dropout=self.dropout)
+
+        # 3) "Concat" using a view and apply a final linear.
+        #print(x.shape)
+        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+        #pos = pos.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+    
+        return self.linears[-1](x) #, self.linears[-1](pos) # orthogonal_complement_loss
+        #return self.chebNet(self.linears[-1](x), L)
+
+
+# Adapted from The Annotated Transformer
+class Encoder(nn.Module):
+    "Core encoder is a stack of N layers"
+    def __init__(self, layer, layer_size, N, dropout, tie_layers=False):
+        super(Encoder, self).__init__()
+        if tie_layers:
+            self.layer = layer()
+            self.layers = [self.layer for _ in range(N)]
+        else:
+            self.layers = clones(layer, N)
+        self.norm = nn.LayerNorm(layer_size)
+        self.ffn = nn.Linear(layer_size, 1)
+
+
+        #self.ChebNet_key= [ChebNet_N(layer_size//8, layer_size//8, k+1, dropout) for k in range(N)]
+        #self.ChebNet_key = ChebNetNN(layer_size, layer_size, 2, dropout)
+        #self.ChebNet_val = ChebNetNN(layer_size, layer_size, 2, dropout)
+
+         # TODO initialize using xavier
+
+    def forward(self, x, relation, pos, mask):
+        "Pass the input (and mask) through each layer in turn."
+        
+        #k = 0
+        relation_head = spreading_relation(relation, 8) # h, n, n
+
+        #adj = (relation > 0) #n, n
+    
+        #adj_head = self.sparse_kron_(A.numpy())  #n*n, n*n
+
+        for layer in self.layers:
+            
+            x = layer(x, relation_head, pos, mask)
+
+        return self.norm(x)
+
+    def sparse_kron_(self, A):
+        
+        A_h = sp.csr_matrix(A)  
+        sparse_product = self.sparse_kron_scipy(A_h, A_h)  # Compute Kronecker product with itself
+
+        return sparse_product
+
+
+
+
+    def sparse_kron_per_head(self, A):
+        """Compute the Kronecker product of sparse matrix A with itself for each head."""
+        n, n_A, _ = A.shape  # Shape of A: (head, n_A, n_A)
+
+        # Initialize a list to hold sparse tensors for each head
+        #result_sparse_heads = []
+
+        # Iterate over each head
+        for h in range(head):
+            A_h = sp.csr_matrix(A[h])  # Get the current head slice
+
+            sparse_product = self.sparse_kron_scipy(A_h, A_h)  # Compute Kronecker product with itself
+            result_sparse_heads.append(sparse_product)
+
+        return result_sparse_heads
+
+    def sparse_kron(self, input: torch.Tensor, other: torch.Tensor):
+        assert input.ndim == other.ndim
+        
+        input_coo = input.to_sparse().coalesce()
+        other_coo = other.to_sparse().coalesce()
+
+
+        input_indices = input_coo.indices()
+        other_indices = other_coo.indices()
+
+        input_indices_expanded = input_indices.expand(other_indices.shape[1], *input_indices.shape).T * torch.tensor(other.shape).reshape(1,-1,1)
+        other_indices_expanded = other_indices.expand(input_indices.shape[1], *other_indices.shape)
+        new_indices = torch.permute(input_indices_expanded + other_indices_expanded, (1,0,2)).reshape(input.ndim,-1)
+
+        new_values = torch.kron(input.values(), other.values())
+
+        if new_indices.ndim == 1:
+            new_indices = new_indices.reshape([input.ndim, 0])
+
+        new_shape = [n * m for n, m in zip(input.shape, other.shape)]
+
+        return torch.sparse_coo_tensor(new_indices, new_values, new_shape, dtype=input.dtype, device=input.device).coalesce()
+
+    def sparse_kron_scipy(self, A: sp.spmatrix, B: sp.spmatrix) -> torch.sparse.Tensor:
+        """Compute the Kronecker product of two sparse matrices using SciPy and convert to PyTorch tensor."""
+        # Compute the Kronecker product using SciPy
+        kron_result = sp.kron(A, B, format='coo')  # Using COO format for conversion
+
+        # Convert the SciPy sparse matrix to a PyTorch sparse tensor
+        #indices = torch.tensor(kron_result.nonzero(), dtype=torch.long)  # Get indices
+        indices = torch.tensor(np.array(kron_result.nonzero()), dtype=torch.long)
+        #values = torch.tensor(kron_result.data, dtype=torch.long)  # Get values
+        values = torch.tensor(np.array(kron_result.data), dtype=torch.long)
+        size = kron_result.shape  # Get the shape
+
+        # Create a PyTorch sparse tensor
+        torch_sparse_tensor = torch.sparse_coo_tensor(indices, values, size)
+
+        return torch_sparse_tensor
+       
+# Adapted from The Annotated Transformer
+class SublayerConnection(nn.Module):
+    """
+    A residual connection followed by a layer norm.
+    Note for code simplicity the norm is first as opposed to last.
+    """
+    def __init__(self, size, dropout):
+        super(SublayerConnection, self).__init__()
+        self.norm = nn.LayerNorm(size)
+        self.dropout = nn.Dropout(dropout)
+        self.size=size
+
+    def forward(self, x, sublayer):
+        "Apply residual connection to any sublayer with the same size."
+        return x + self.dropout(sublayer((self.norm(x))))
+        #return x+xx, lr
+
+
+# Adapted from The Annotated Transformer
+class EncoderLayer(nn.Module):
+    "Encoder is made up of self-attn and feed forward (defined below)"
+    def __init__(self, size, self_attn, feed_forward, num_relation_kinds, dropout, hope = 8):
+        super(EncoderLayer, self).__init__()
+        self.self_attn = self_attn
+        self.feed_forward = feed_forward
+        #self.ChebNet = ChebNet
+        
+        self.sublayer = clones(lambda: SublayerConnection(size, dropout), 2)
+        self.size = size
+
+        ##vocab_sizes = [num_relation_kinds + (h-1) * 12 for h in range(1, hope+1)]
+
+        ##self.relation_k_emb = nn.ModuleList([nn.Embedding(vocab_size, self.self_attn.d_k) for vocab_size in vocab_sizes])
+        ##self.relation_v_emb = nn.ModuleList([nn.Embedding(vocab_size, self.self_attn.d_k) for vocab_size in vocab_sizes])
+
+        self.relation_q_emb = nn.Embedding(num_relation_kinds, self.self_attn.d_k)
+        self.relation_k_emb = nn.Embedding(num_relation_kinds, self.self_attn.d_k)
+        self.relation_v_emb = nn.Embedding(num_relation_kinds, self.self_attn.d_k)
+        
+        #self.my_input=torch.tensor([0,1,2,3,4,5,6,7,8, 9, 10, 11, 12, 13, 14, 15, 16])
+        self.my_input=torch.tensor([i for i in range(num_relation_kinds)])
+        #self.my_input=torch.tensor([i for i in range(num_relation_kinds + (hope-1) * 12)])
+
+        ##self.my_input = [torch.tensor([i for i in range(j)]) for j in vocab_sizes]
+        
+
+    def forward(self, x, relation, pos,  mask):
+        "Follow Figure 1 (left) for connections."
+        #print(self.my_input)
+        #print(relation3.shape)
+
+        #relation are already spread through heads
+
+        relation_query = self.relation_q_emb(relation)
+        relation_key   = self.relation_k_emb(relation)
+        relation_val   = self.relation_v_emb(relation)
+
+        #relation_query = heading_relation2_17(self.relation_q_emb(relation), 8, self.relation_q_emb(self.my_input))
+        #relation_key   = heading_relation2_17(self.relation_k_emb(relation), 8, self.relation_k_emb(self.my_input))
+        #relation_val   = heading_relation2_17(self.relation_v_emb(relation), 8, self.relation_v_emb(self.my_input))
+
+        #relation_k = ChebNet(heading_relation2_17(relation_key, 8, self.relation_k_emb(self.my_input)), relation>0)
+        #relation_v = ChebNet(heading_relation2_17(relation_val, 8, self.relation_v_emb(self.my_input)), relation>0)
+
+        
+
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, relation_query, relation_key, relation_val, pos, mask))
+        #x = self.sublayer[1](x, lambda x: self.ChebNet(x, L))
+
+        
+        return self.sublayer[1](x,  self.feed_forward) #, self.sublayer[1](pos,  self.feed_forward)
+        # orthogonal_complement_loss(self.relation_q_emb(self.my_input), self.relation_k_emb(self.my_input))
+        
+
+class EncoderLayer_final(nn.Module):
+    "Encoder is made up of self-attn and feed forward (defined below)"
+    def __init__(self, size, self_attn, feed_forward, dropout):
+        super(EncoderLayer_final, self).__init__()
+        self.self_attn = self_attn
+        self.feed_forward = feed_forward
+        self.sublayer = clones(lambda: SublayerConnection(size, dropout), 2)
+        self.size = size
+
+    def forward(self, x, mask):
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
+        return self.sublayer[1](x, self.feed_forward)
+
+# Adapted from The Annotated Transformer
+class PositionwiseFeedForward(nn.Module):
+    "Implements FFN equation."
+    def __init__(self, d_model, d_ff, dropout=0.1):
+        super(PositionwiseFeedForward, self).__init__()
+        self.w_1 = nn.Linear(d_model, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.w_2(self.dropout(F.relu(self.w_1(x))))
+
+
+class ChebNetNN(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, K, dropout):
+        super(ChebNetNN, self).__init__()
+        # Define Chebyshev Convolution layer with K Chebyshev polynomials
+        self.conv1 = ChebConv(in_channels, out_channels, K)
+        self.dropout = torch.nn.Dropout(p=dropout)
+
+    def forward(self, x, L):
+
+        # Step 2: Stack the row and column indices to form edge_index in COO format
+        edge_index = L.coalesce().indices()
+
+        # Apply Chebyshev convolution and activation function
+        x = self.dropout(self.conv1(x, edge_index))
+        #return F.relu(x)
+        return x
+
+class ChebNet_N(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, K, dropout):
+        super(ChebNet_N, self).__init__()
+        self.conv1 = ChebConv(in_channels, out_channels, K)
+        self.dropout = torch.nn.Dropout(p=dropout)
+
+    def forward(self, x, A):
+
+        # A shape is h, n^2, n^2
+        h, n, _, f = x.shape  # h: number of heads, n: number of nodes, f: features
+        outputs = []
+
+        for i in range(h):  # Loop over heads
+            # Get edge indices from the transformed adjacency matrix for head i
+            
+            #row, col = torch.nonzero(A[i], as_tuple=True)  # Valid edges only
+            #edge_index = torch.stack([row, col], dim=0)  # Shape (2, number_of_edges)
+            edge_index = A[i].coalesce().indices()
+
+            # Flatten feature tensor to handle each (n, n, f) section as (n*n, f)
+            x_flattened = x[i].view(-1, f)  # Shape (n*n, f)
+
+            # Apply Chebyshev convolution
+            out_i = self.dropout(self.conv1(x_flattened, edge_index))
+
+            # Reshape output to (n, n, out_channels) for the current head
+            out_reshaped = out_i.view(n, n, -1)  # Shape (n, n, out_channels)
+
+            # Store the output for this head
+            outputs.append(out_reshaped)
+
+        # Stack the outputs for all heads back together
+        return torch.stack(outputs, dim=0)  # Shape (h, n, n, out_channels)
+
+
+def spreading_relation(relation, head):
+#t shape is (number of indice, features)
+    q, k=relation.shape
+    r=torch.empty(head, q, k)
+    rr=torch.zeros_like(r, dtype=torch.int32)
+    rr[7]=relation #rr[0]=0 #None
+    for i in range (1, head-1):
+        if (i==1):#SD
+            rr[i]=torch.where((relation >= 1) & (relation < 3), relation, torch.tensor(0))
+
+        elif (i==2):#s_enc
+            rr[i]=torch.where((relation >= 7) & (relation < 17), relation, torch.tensor(0))
+
+        elif (i==3):#s_link
+            rr[i]=torch.where((relation >= 3) & (relation < 7), relation, torch.tensor(0))
+
+        elif (i==4):#{SD, S_enc}
+            rr[i]= rr[1] + rr [2]
+
+        elif (i==5):#{SD, S_link}
+            rr[i]= rr[1] + rr[3]
+
+        elif (i==6):#{S_enc, S_link}
+            rr[i]= rr[3] + rr[2]
+    return rr
+
+def spreading_relation_Pointer(relation, head):
+#t shape is (number of indice, features) head = 4
+    q, k =relation.shape
+    r=torch.empty(head, q, k)
+    rr=torch.zeros_like(r, dtype=torch.int32)
+    rr[3]=relation #rr[0]=0 #None
+    for i in range (1, head-1):
+        if (i==1):#s_enc
+            rr[i]=torch.where((relation >= 7) & (relation < 17), relation, torch.tensor(0))
+
+        elif (i==2):#s_link
+            rr[i]=torch.where((relation >= 3) & (relation < 7), relation, torch.tensor(0))
+    return rr
+
+###########################################################################################################
+
+
+class ChebyshevGNN(nn.Module):
+    def __init__(self, in_features, out_features, K, device):
+        super(ChebyshevGNN, self).__init__()
+        self.K = K
+        self.device = device
+        
+        # Initialize learnable parameters for each Chebyshev polynomial
+        self.theta = nn.ParameterList([nn.Parameter(torch.randn(1).to(device)) for _ in range(K + 1)])
+
+    def chebyshev_approximation(self, L):
+        """
+        Approximates the spectral filter g(L) using Chebyshev polynomials.
+
+        Args:
+        L: Rescaled Laplacian matrix of shape (n, n)
+
+        Returns:
+        g_L: Approximated spectral filter g(L) as a sum of Chebyshev polynomials.
+        """
+        n = L.shape[0]
+
+        # Initialize Chebyshev polynomials T_0 and T_1
+        T_0 = torch.eye(n).to(self.device)  # T_0 = I (Identity matrix)
+        T_1 = L  # T_1 = L (The rescaled Laplacian)
+
+        # Initialize the filter g(L) as theta_0 * T_0 + theta_1 * T_1
+        g_L = self.theta[0].item() * T_0 + self.theta[1].item() * T_1
+
+        # Compute higher-order Chebyshev polynomials
+        for k in range(2, self.K + 1):
+            T_k = 2 * torch.matmul(L, T_1) - T_0  # Recursively compute T_k
+            g_L += self.theta[k] * T_k  # Add the weighted Chebyshev polynomial to g(L)
+            T_0, T_1 = T_1, T_k  # Shift polynomials for next iteration
+
+        return g_L
+
+    def forward(self, L, X):
+        """
+        Forward pass of the GNN layer.
+
+        Args:
+        L: Rescaled Laplacian matrix of shape (n, n)
+        X: Input feature matrix of shape (n, in_features)
+
+        Returns:
+        Output feature matrix after applying the graph convolution.
+        """
+        g_L = self.chebyshev_approximation(L)
+        return torch.matmul(g_L, X)
+
+
+
+#######################################################################################################""
+class TopologicalEmbLayer(nn.Module):
+    "Encoder is made up of self-attn and feed forward (defined below)"
+    def __init__(self,  num_relation_kinds, features, hope = 8):
+        super(TopologicalEmbLayer, self).__init__()
+        
+        self.features=features
+        self.relation_k_emb = nn.Embedding(num_relation_kinds + (hope-1) * 13, self.features)
+        self.relation_v_emb = nn.Embedding(num_relation_kinds + (hope-1) * 13, self.features)
+
+        self.my_input=torch.tensor([i for i in range(num_relation_kinds + (hope-1) * 13)])
+
+    def forward(self, relation):
+        "Follow Figure 1 (left) for connections."
+        #print(self.my_input)
+
+        relation_key = self.relation_k_emb(relation)
+        relation_val = self.relation_v_emb(relation)
+
+        relation_k=self.heading_relation(relation_key, 8, self.relation_k_emb(self.my_input), 2)
+        relation_v=self.heading_relation(relation_val, 8, self.relation_v_emb(self.my_input), 2)
+        
+        return relation_k, relation_v
+    
+    def heading_relation(self, relation, heads, space_embedding, hopes):
+        #t shape is (number of indice, features)
+        q, k, f=relation.shape # q, k, 8
+        r=torch.empty(hopes, heads, q, k, f)
+        rr=torch.zeros_like(r)
+        
+        for hope in range (0, hopes):
+            mask1 = masking(relation, space_embedding, 0, 23)
+            mask2 = maskingHope(relation, space_embedding, hope, 0, 14)
+            mask = mask1 + mask2
+            rr[hope, 7] = relation * mask #all realtion in hope i
+            
+            for head in range (0, heads-1):
+                if(head==0): #None
+                    mask1 = masking(relation, space_embedding, 0, 1)
+                    mask2 = maskingHope(relation, space_embedding, hope, 1, 2)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+                if (head==1):#SD
+                    mask1 = masking(relation, space_embedding, 1, 3)
+                    mask2 = maskingHope(relation, space_embedding, hope, 2, 4)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+                elif (head==2):#s_enc
+                    mask1 = masking(relation, space_embedding, 13, 23)
+                    mask2 = maskingHope(relation, space_embedding, hope, 8, 14)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+                elif (head==3):#s_link
+                    mask1 = masking(relation, space_embedding, 3, 13)
+                    mask2 = maskingHope(relation, space_embedding, hope, 4, 8)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+                elif (head==4):#{SD, S_enc}
+                    mask1 = masking(relation, space_embedding, 1, 3)
+                    mask2 = masking(relation, space_embedding, 13, 23)
+                    mask3 = maskingHope(relation, space_embedding, hope, 2, 4)
+                    mask4 = maskingHope(relation, space_embedding, hope, 8, 14)
+                    mask=mask1+mask2+mask3+mask4
+                    rr[hope, head]=relation*mask
+                elif (head==5):#{SD, S_link}
+                    mask1 = masking(relation, space_embedding, 1, 13)
+                    #mask2 = masking(relation, space_embedding, 1, 7)
+                    mask2 = maskingHope(relation, space_embedding, hope, 2, 8)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+                elif (head==6):#{S_enc, S_link}
+                    mask1 = masking(relation, space_embedding, 3, 23)
+                    mask2 = maskingHope(relation, space_embedding, hope, 4, 14)
+                    mask = mask1 + mask2
+                    rr[hope, head]=relation*mask
+        return rr
+
+##################################################################################################""
+# Collaborative attention implementation
+#https://github.com/epfml/collaborative-attention/blob/master/src/collaborative_attention/collaborative_attention.py
+
+
+def init_mixing_matrix(num_attention_heads, features, type, scale=0.2):
+        mixing = torch.zeros(num_attention_heads, features)
+
+        if type==1:
+            # last head will be smaller if not equally divisible
+            dim_head = int(math.ceil(self.dim_key_query_all / self.num_attention_heads))
+            for i in range(self.num_attention_heads):
+                mixing[i, i * dim_head : (i + 1) * dim_head] = 1.0
+
+        elif type==2:
+            mixing.one_()
+        elif type==3:
+            mixing.normal_(std=scale)
+        else:
+            raise ValueError(
+                "Unknown mixing matrix initialization: {}".format(
+                    self.mixing_initialization
+                )
+            )
+
+        return nn.Parameter(mixing)
+
+#Not used
+
+def orthogonal_complement_loss(x, y):
+    mylambda=1.0e-3
+    z = F.linear(x, y)
+    loss = mylambda * (torch.mean(torch.abs(z)))# + 0.1 * orthogonal_loss(x, y))
+    #print(loss)
+    return loss
+
+def orthogonal_loss(x, y):
+    # Compute the projection of the columns of x onto the column space of y
+    x_proj = torch.matmul(y, torch.matmul(y.t(), x))
+    # Compute the projection of the columns of y onto the column space of x
+    y_proj = torch.matmul(x, torch.matmul(x.t(), y))
+    # Compute the Frobenius norm of the projection matrices
+    x_proj_norm = torch.norm(x_proj, p='fro')
+    y_proj_norm = torch.norm(y_proj, p='fro')
+    # Compute the loss as the sum of the Frobenius norms
+    loss = x_proj_norm + y_proj_norm
+    return loss
+
+
+
+
+def orthogonal_complement_of_y_to_x(x, y):
+    # Calculate the orthogonal complement of y with respect to x
+    y_ortho = y - torch.matmul(torch.matmul(y, x.transpose(-2, -1)), x)
+
+    # Normalize the orthogonalized tensors
+    y_ortho = y_ortho / torch.norm(y_ortho, dim=-1, keepdim=True)
+    return y_ortho
+
+def Orthogonal_reg(relation):
+    lrr=0
+    line, col=relation.shape
+    
+    #ortho_reg = torch.norm(torch.matmul(relation, relation.t()) - torch.eye(embedding_dim))
+
+    #Dimension: [line, line]
+    rr_t=torch.matmul(relation, relation.transpose(-2, -1))
+
+    IO=torch.ones(line, line)-torch.eye(line, line)
+
+    #Dimension: [dim, dim]
+    A=torch.mul(rr_t,IO) #elements wise multiplication
+
+    lrr=(torch.norm(A, p='fro'))**2
+
+    return 1.0e-3*lrr
+
+def descending_order_loss(embedding_):
+    # y_pred: predicted embedding
+    
+    # Compute pairwise distances between adjacent elements in y_pred starting from index 1
+    pred_distances = embedding_[1:] - embedding_[:-1]
+    
+    # Compute the hinge loss for any pairs that violate the desired ordering
+    hinge_loss = torch.clamp(pred_distances, min=0.0001)
+    
+    # Compute the mean of all hinge losses and return it as the output
+    return 1.0e-3*hinge_loss.float().mean()
