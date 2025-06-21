@@ -24,12 +24,15 @@ NM Ndongala - Texila Int. J. Acad. Res, 2023
 2. Install spacy  
 3. Getting Light RAT-SQL updated from specific RAT-SQL files:
    
-# Change of preexisting computation, reducing from 50+ to 7
+Change of preexisting computation, reducing from 50+ to 7 : 
 
-### \light_ratsql\models\spider\spider_enc_modules.py 
+- \light_ratsql\models\spider\spider_enc_modules.py 
 
-# compute_syntax_dependancy forward and backward relation computed use spacy
+compute_syntax_dependancy (forward and backward relation) using spacy
 
-### \light_ratsql\models\spider\spider_enc.py 
-### \light_ratsql\models\spider\spider_match_utils.py 
-5. 
+- \light_ratsql\models\spider\spider_enc.py 
+- \light_ratsql\models\spider\spider_match_utils.py
+
+## Acknowledgment
+This project builds upon RAT-SQL by Microsoft Research, licensed under the MIT License.
+We thank the original authors for their foundational work in neural semantic parsing.
