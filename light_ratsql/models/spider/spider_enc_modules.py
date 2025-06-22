@@ -335,18 +335,20 @@ class RelationalTransformerUpdate(torch.nn.Module):
             self.relation_ids[name] = len(self.relation_ids)
 
         add_relation('none') #1
-        add_relation('functional_dependancy') #2 Column to Column
 		
         #Nathan adding : Syntax dependancy relations
-        add_relation('qqSPbackward') #3      
-        add_relation('qqSPforward') #4
+        add_relation('qqSPbackward') #2      
+        add_relation('qqSPforward') #3
 
         # schema linking relations
         
-        add_relation('NBL') # 5 Name-Based Linking: Exact Matching et 6 Partial Matching
-        add_relation('VBL') #6 Value-Based Linking: Cell values Linking
-        add_relation('HAS') #7 table to column
-        #add_relation('unknow') #8 unknow
+        add_relation('NBL') #4 Name-Based Linking: Exact Matching et 6 Partial Matching
+        add_relation('VBL') #5 Value-Based Linking: Cell values Linking
+        add_relation('HAS') #6 table to column
+
+        
+        add_relation('functional_dependancy') #7 Column to Column
+        add_relation('TT') #8 Table to Table
 
         if ff_size is None:
             ff_size = hidden_size * 4
@@ -412,7 +414,7 @@ class RelationalTransformerUpdate(torch.nn.Module):
                                         enc_new[:, c_base:t_base], relations_t[:, c_base:t_base])
         m2t_align_mat = self.align_attn(enc_new, enc_new[:, t_base:], \
                                         enc_new[:, t_base:], relations_t[:, t_base:])
-        return q_enc_new, c_enc_new, t_enc_new, (m2c_align_mat, m2t_align_mat)
+        return q_enc_new, c_enc_new, t_enc_new, (m2c_align_mat, m2t_align_mat), 0
 
     def forward(self, descs, q_enc, c_enc, c_boundaries, t_enc, t_boundaries):
         # TODO: Update to also compute m2c_align_mat and m2t_align_mat
@@ -581,7 +583,7 @@ class RelationalTransformerUpdate(torch.nn.Module):
                         set_relation('none')
 						
                 elif j_type[0] == 'table':
-                    set_relation('none')
+                    set_relation('TT')
 				
         return relations
 

@@ -358,7 +358,7 @@ def spread_relations_through_heads(relation, num_heads, embedding_lookup):
 
     # Step 10–12: Spread to other heads using mask
     for i in range(1, num_heads):
-        embedding_i = embedding_lookup(i)  # (feature_dim,)
+        embedding_i = embedding_lookup(torch.tensor(i))  # (feature_dim,)
         # Step 11: Create boolean mask where relation == embedding_i
         mask = torch.all(relation == embedding_i.view(1, 1, -1), dim=-1)  # shape: (query, key)
 
