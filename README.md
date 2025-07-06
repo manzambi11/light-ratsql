@@ -27,25 +27,33 @@ This code was developed as part of my PhD research in NLP and semantic parsing (
 
 - **or follow these steps:**
 
-      1. Follow steps from [RAT-SQL](https://github.com/microsoft/rat-sql)
-
-      2. Install spacy 3.4:
-           - pip install spacy==3.4
-           - python -m spacy download en_core_web_sm
-
-      3. Getting Light RAT-SQL updated files from specific RAT-SQL files:
-   
-            Change of preexisting computation, reducing from 50+ to 7 : 
-
-                  - \light_ratsql\models\spider\spider_enc_modules.py 
-
-            Compute_syntax_dependancy (forward and backward relation) using spacy
-
-                  - \light_ratsql\models\spider\spider_enc.py 
-                  - \light_ratsql\models\spider\spider_match_utils.py
-
-            Spreading relation through heads before Transformer Computation 
-                  - \light_ratsql\models\transformer.py
+<ol>
+      <li><p>Follow steps from <a href="https://github.com/microsoft/rat-sql">[RAT-SQL]</a></p></li>
+      <li> Install spacy 3.4: 
+      <ul>
+      <li><code>pip install spacy==3.4</code></li>
+      <li><code>python -m spacy download en_core_web_sm</code></li>
+      </ul>
+      </li>
+      <li>Getting Light RAT-SQL updated files from specific RAT-SQL files: 
+      <ul>
+      <li> Change of preexisting computation, reducing from 50+ to 7 :
+      <li>\light_ratsql\models\spider\spider_enc_modules.py </li>
+      </ul>
+      </li>
+      <li> Compute_syntax_dependancy (forward and backward relation) using spacy
+      <ul>
+      <li>\light_ratsql\models\spider\spider_enc.py</li>
+      <li>\light_ratsql\models\spider\spider_match_utils.py</li>
+      </ul>      
+      </li>
+      <li> Spreading relation through heads before Transformer Computation <br> 
+      <ul>
+      <li>\light_ratsql\models\transformer.py</li>
+      </ul>
+      </li>
+    </li>
+</ol>
 
 ## Author
 
