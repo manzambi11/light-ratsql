@@ -23,10 +23,9 @@ This code was developed as part of my PhD research in NLP and semantic parsing (
 
 ## 🚀 Quick Start
 
-- **Docker command** : docker pull manzambi11/light_ratsql:latest
-
+- **Docker command** : <p><code>docker pull manzambi11/light_ratsql:latest</code></p>
 - **or follow these steps:**
-
+  
 <ol>
       <li><p>Follow steps from <a href="https://github.com/microsoft/rat-sql">[RAT-SQL]</a></p></li>
       <li> Install spacy 3.4: 
